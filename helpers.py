@@ -24,9 +24,9 @@ def cluster_lines(lines,RHO_BIAS,ANGLE_BIAS):
         out.append((float(np.mean(rs)), float(np.mean(ts))))
     return np.array(out, np.float32).reshape(-1,1,2)
 
-def get_homography(pts,W_TARGET=640,H_TARGET=480):
-    dst = np.float32([[0,0],[W_TARGET,0],[W_TARGET,H_TARGET],[0,H_TARGET]])
-    return cv2.getPerspectiveTransform(np.float32(pts), dst)
+# def get_homography(pts,W_TARGET=640,H_TARGET=480):
+#     dst = np.float32([[0,0],[W_TARGET,0],[W_TARGET,H_TARGET],[0,H_TARGET]])
+#     return cv2.getPerspectiveTransform(np.float32(pts), dst)
 
 def bird_view(corner_pts, W_TARGET=640, H_TARGET=480):
     src_points = np.float32(corner_pts)
@@ -54,3 +54,14 @@ def bird_view(corner_pts, W_TARGET=640, H_TARGET=480):
     adjustment_matrix = np.array([[1, 0, -min_x], [0, 1, -min_y], [0, 0, 1]], dtype=np.float32)
     adjusted_matrix = adjustment_matrix @ matrix
     return adjusted_matrix, (output_width, output_height)
+
+def get_roi(roi_pts):
+    x1, y1 = roi_pts[0]
+    x2, y2 = roi_pts[1]
+    x3, y3 = roi_pts[2]
+    x4, y4 = roi_pts[3]
+
+    # Calculate each lines based on the points
+    delta_x=
+    delta_y=
+

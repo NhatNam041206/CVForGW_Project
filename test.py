@@ -1,18 +1,17 @@
-# test.py – clean rewrite (v3) with proper crop sizing
+# test.py – v7: use ROI points directly for bird‑eye (no extra warp phase)
 # -------------------------------------------------------------
-# Phases:
-#   1. ROI   – click 4 pts (pink)  → binary mask
-#   2. Warp  – click 4 pts (red)   → homography H
-#   3. Run   – warp frame & mask, crop exact area, analyse lines
+# Flow
+#   1. ROI phase  – click exactly 4 points of the area of interest.
+#   2. Run phase  – homography built from those 4 points, warp frame & mask.
 # -------------------------------------------------------------
 
 import cv2
 import numpy as np
 from helpers import rotate, cluster_lines, create_binary_quad
 
-# ───────── configuration ─────────────────────────────────────
-ROTATE_CW_DEG      = 90
-W_TARGET, H_TARGET = 640, 480   # base canvas size after resize & warp
+# ───────── parameters ───────────────────────────────────────
+ROTATE_CW_DEG = 90
+PREVIEW_W, PREVIEW_H = 640, 480   # resize camera frame for preview
 
 CANNY_T1, CANNY_T2 = 40, 120
 CANNY_APER         = 3
@@ -21,109 +20,100 @@ HOUGH_THETA        = np.pi / 180
 HOUGH_THRESH       = 140
 ANGLE_BIAS, RHO_BIAS = 0.3, 20
 
-# ───────── internal state ────────────────────────────────────
-phase        = "roi"  # roi → warp → run
-roi_pts:  list[list[int]] = []
-warp_pts: list[list[int]] = []
-roi_mask: np.ndarray | None = None
-H:        np.ndarray | None = None
+# ───────── runtime state ────────────────────────────────────
+phase = "roi"           # "roi" → "run"
+roi_pts = []            # 4 clicked points
+roi_mask = None         # binary mask in preview space
+H = None                # homography matrix
+DST_W = PREVIEW_W       # will be overwritten when H built
+DST_H = PREVIEW_H
 
-# ───────── helper functions ──────────────────────────────────
+# ───────── helpers ─────────────────────────────────────────
 
-def order_pts(pts: list[list[int]]) -> np.ndarray:
+def order_pts(pts):
     """Return points in TL, TR, BR, BL order."""
-    pts = np.asarray(pts, dtype=np.float32)
-    s   = pts.sum(axis=1)
-    d   = np.diff(pts, axis=1)[:, 0]
+    pts = np.asarray(pts, np.float32)
+    s = pts.sum(axis=1)
+    d = np.diff(pts, axis=1)[:, 0]
     return np.array([
-        pts[np.argmin(s)],
-        pts[np.argmin(d)],
-        pts[np.argmax(s)],
-        pts[np.argmax(d)],
-    ], dtype=np.float32)
+        pts[np.argmin(s)], pts[np.argmin(d)],
+        pts[np.argmax(s)], pts[np.argmax(d)]
+    ], np.float32)
 
 
-def build_H(src_pts: list[list[int]]) -> np.ndarray:
+def build_H(src_pts):
     src = order_pts(src_pts)
-    dst = np.float32([[0, 0], [W_TARGET, 0],
-                      [W_TARGET, H_TARGET], [0, H_TARGET]])
-    return cv2.getPerspectiveTransform(src, dst)
+    # destination size computed from ROI dimensions
+    w_top  = np.hypot(*(src[1] - src[0]))
+    w_bot  = np.hypot(*(src[2] - src[3]))
+    h_left = np.hypot(*(src[3] - src[0]))
+    h_right= np.hypot(*(src[2] - src[1]))
+    dst_w = int(max(w_top, w_bot))
+    dst_h = int(max(h_left, h_right))
+    dst_w = max(dst_w, 1); dst_h = max(dst_h, 1)
+    dst = np.float32([[0, 0], [dst_w-1, 0], [dst_w-1, dst_h-1], [0, dst_h-1]])
+    H = cv2.getPerspectiveTransform(src, dst)
+    return H, dst_w, dst_h
 
 
-def crop_by_mask(img: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Crop image to the bounding box of non-zero mask region."""
-    coords = cv2.findNonZero(mask)
-    if coords is None:
-        return img  # nothing – return as is
-    x, y, w, h = cv2.boundingRect(coords)
-    return img[y : y + h, x : x + w]
+def bbox_from_mask(mask):
+    nz = cv2.findNonZero(mask)
+    if nz is None:
+        return 0, 0, mask.shape[1], mask.shape[0]
+    return cv2.boundingRect(nz)
 
-# ───────── mouse callbacks ──────────────────────────────────
+# ───────── mouse callback ──────────────────────────────────
 
 def cb_roi(event, x, y, *_):
-    global phase, roi_pts, roi_mask
+    global phase, roi_pts, roi_mask, H, DST_W, DST_H
     if phase != "roi" or event != cv2.EVENT_LBUTTONDOWN:
         return
     roi_pts.append([x, y])
     if len(roi_pts) == 4:
-        roi_mask = create_binary_quad(roi_pts, img_size=(H_TARGET, W_TARGET))
+        # build mask in preview coordinates
+        roi_mask = create_binary_quad(roi_pts, (PREVIEW_H, PREVIEW_W))
         roi_mask = (roi_mask > 0).astype(np.uint8) * 255
-        phase = "warp"
-        cv2.setMouseCallback("raw", cb_warp)
-
-
-def cb_warp(event, x, y, *_):
-    global phase, warp_pts, H
-    if phase != "warp" or event != cv2.EVENT_LBUTTONDOWN:
-        return
-    warp_pts.append([x, y])
-    if len(warp_pts) == 4:
-        H = build_H(warp_pts)
+        # homography to rectangle
+        H, DST_W, DST_H = build_H(roi_pts)
         phase = "run"
-        cv2.setMouseCallback("raw", lambda *args: None)
+        cv2.setMouseCallback("raw", lambda *a: None)  # disable further clicks
 
-# ───────── main loop ────────────────────────────────────────
+# ───────── main loop ───────────────────────────────────────
 
-def main() -> None:
+def main():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         raise IOError("Cannot open camera")
 
-    cv2.namedWindow("raw")
-    cv2.setMouseCallback("raw", cb_roi)
+    # windows
+    cv2.namedWindow("raw");   cv2.setMouseCallback("raw", cb_roi)
     cv2.namedWindow("bird")
+    cv2.namedWindow("roi_warp")
     cv2.namedWindow("crop")
     cv2.namedWindow("edges")
     cv2.namedWindow("lines")
 
-    print("Instructions:\n"
-          "  ROI  : click 4 pts (pink) → R reset → Q quit\n"
-          "  Warp : click 4 pts (red)  → R reset → Q quit\n")
+    global phase, roi_pts, roi_mask, H, DST_W, DST_H
 
-    global phase, roi_pts, warp_pts, roi_mask, H
     while True:
         ok, frame = cap.read()
         if not ok:
             break
         frame = rotate(frame, ROTATE_CW_DEG)
-        frame = cv2.resize(frame, (W_TARGET, H_TARGET))
-        raw   = frame.copy()
+        frame = cv2.resize(frame, (PREVIEW_W, PREVIEW_H))
+        raw = frame.copy()
 
         # keyboard
         key = cv2.waitKey(1) & 0xFF
-        if key in (ord("q"), ord("Q")):
+        if key in (ord('q'), ord('Q')):
             break
-        if key in (ord("r"), ord("R")):
-            if phase == "roi":
-                roi_pts.clear(); roi_mask = None
-            elif phase == "warp":
-                warp_pts.clear(); H = None
-            elif phase == "run":
-                phase = "warp"; warp_pts.clear(); H = None
-                cv2.setMouseCallback("raw", cb_warp)
+        if key in (ord('r'), ord('R')):
+            roi_pts.clear(); roi_mask = None; H = None
+            phase = "roi"
+            cv2.setMouseCallback("raw", cb_roi)
             continue
 
-        # ---------- Phase visuals ----------
+        # ROI selection phase
         if phase == "roi":
             vis = raw.copy()
             for p in roi_pts:
@@ -133,41 +123,36 @@ def main() -> None:
             cv2.imshow("raw", vis)
             continue
 
-        if phase == "warp":
-            vis = cv2.bitwise_and(raw, raw, mask=roi_mask)
-            for p in warp_pts:
-                cv2.circle(vis, tuple(p), 4, (0, 0, 255), -1)
-            if len(warp_pts) == 4:
-                cv2.polylines(vis, [np.int32(warp_pts)], True, (0, 255, 0), 2)
-            cv2.imshow("raw", vis)
-            continue
+        # Run phase
+        bird = cv2.warpPerspective(raw, H, (DST_W, DST_H))
+        roi_warp = cv2.warpPerspective(roi_mask, H, (DST_W, DST_H), flags=cv2.INTER_NEAREST)
+        cv2.imshow("roi_warp", cv2.cvtColor(roi_warp, cv2.COLOR_GRAY2BGR))
 
-        # ---------- Run phase ----------
-        bird      = cv2.warpPerspective(raw,      H, (W_TARGET, H_TARGET))
-        roi_warp  = cv2.warpPerspective(roi_mask, H, (W_TARGET, H_TARGET),
-                                        flags=cv2.INTER_NEAREST)
-        bird_roi  = cv2.bitwise_and(bird, bird, mask=roi_warp)
-        crop_img  = crop_by_mask(bird_roi, roi_warp)
+        # crop via bbox of roi_warp
+        x, y, w, h = bbox_from_mask(roi_warp)
+        crop_img = bird[y:y+h, x:x+w]
+        roi_sub  = roi_warp[y:y+h, x:x+w]
+        bird_roi = cv2.bitwise_and(crop_img, crop_img, mask=roi_sub)
 
-        # — edge & Hough —
-        gray   = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
-        edges  = cv2.Canny(gray, CANNY_T1, CANNY_T2, apertureSize=CANNY_APER)
-        lines  = cv2.HoughLines(edges, HOUGH_RHO, HOUGH_THETA, HOUGH_THRESH)
-        lines_c_raw = cluster_lines(lines, RHO_BIAS, ANGLE_BIAS)
+        # edge & Hough
+        gray = cv2.cvtColor(bird_roi, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, CANNY_T1, CANNY_T2, apertureSize=CANNY_APER)
+        raw_lines = cv2.HoughLines(edges, HOUGH_RHO, HOUGH_THETA, HOUGH_THRESH)
+        lines_c_raw = cluster_lines(raw_lines, RHO_BIAS, ANGLE_BIAS)
         lines_c = np.asarray(lines_c_raw, np.float32).reshape(-1, 1, 2)
 
-        vis = crop_img.copy()
+        vis = bird_roi.copy()
         for r, t in lines_c[:, 0]:
             a, b = np.cos(t), np.sin(t)
-            x0, y0 = a * r, b * r
-            p1 = (int(x0 + 1000 * (-b)), int(y0 + 1000 * a))
-            p2 = (int(x0 - 1000 * (-b)), int(y0 - 1000 * a))
+            x0, y0 = a*r, b*r
+            p1 = (int(x0 + 1000*(-b)), int(y0 + 1000*a))
+            p2 = (int(x0 - 1000*(-b)), int(y0 - 1000*a))
             cv2.line(vis, p1, p2, (0, 255, 0), 2)
 
         # show
-        cv2.imshow("raw", crop_img)
+        cv2.imshow("raw", bird_roi)
         cv2.imshow("bird", bird)
-        cv2.imshow("crop", crop_img)
+        cv2.imshow("crop", bird_roi)
         cv2.imshow("edges", cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR))
         cv2.imshow("lines", vis)
 

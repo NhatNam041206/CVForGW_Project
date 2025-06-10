@@ -24,7 +24,7 @@ Folowing steps:
 CANNY_T1, CANNY_T2 = 40, 120
 CANNY_APER   = 3
 BLUR_KSIZE   = 5
-ROTATE_CW_DEG = 0
+ROTATE_CW_DEG = 90
 HOUGH_RHO, HOUGH_THETA, HOUGH_THRESH = 1, np.pi/180, 140
 ANGLE_BIAS, RHO_BIAS = 0.3, 20          # cluster tolerances
 W_TARGET, H_TARGET   = 640, 480         # warp size & preview size
@@ -35,7 +35,7 @@ roi_pts = []      # holds ≤4 clicks  (AOI corners)
 
 def on_click_roi(event, x, y, *_):
     if event == cv2.EVENT_LBUTTONDOWN and len(roi_pts) < 4:
-        corner_pts.append([x, y])
+        roi_pts.append([x, y])
 
 def on_click_bird_view(event, x, y, *_):
     if event == cv2.EVENT_LBUTTONDOWN and len(corner_pts) < 4:
@@ -49,17 +49,17 @@ if not cap.isOpened():
 
 get_bird = False      # becomes True after 4 clicks
 H = None
+get_roi=False
 
 # ───────── ROI selecting ───────────────────
-get_roi=False
 print("Q quit | R reset points | C confirm (ROI)")
 
-cv2.namedWindow('raw')
 cv2.namedWindow('inputted_ROI')
 cv2.setMouseCallback('inputted_ROI', on_click_roi)
+cv2.namedWindow('raw')
 cv2.namedWindow('ROI')
 
-while not get_roi:
+while True:
     ok, frame = cap.read()
     if not ok: 
         nextRunning=False
@@ -75,18 +75,26 @@ while not get_roi:
         roi_pts.clear(); get_bird = False
     if key in (ord('q'), ord('Q')):
         break
-    if key in (ord('c'), ord('C')) and len(corner_pts) == 4:
+    if key in (ord('c'), ord('C')) and len(roi_pts) == 4:
+        mask= create_binary_quad(roi_pts, img_size=(H_TARGET,W_TARGET))
+        cv2.imshow('mask', mask)
+        roi=apply_roi(mask)
+        # cv2.imshow('roi', roi)
         get_roi = True
     if not get_roi:
         raw_disp = frame.copy()
         for p in roi_pts:
-            cv2.circle(raw_disp, tuple(p), 5, (255,0,0), -1)
+            cv2.circle(raw_disp, tuple(p), 5, (255,0,255), -1)
         if len(roi_pts) == 4:
-            cv2.polylines(raw_disp, [np.int32(corner_pts)], True, (0,255,0), 2)
-        cv2.imshow('inputted', raw_disp)
+            cv2.polylines(raw_disp, [np.int32(roi_pts)], True, (255,255,0), 2)
+        cv2.imshow('inputted_ROI', raw_disp)
+    if get_roi:
+        # continue
+        new_frame = cv2.bitwise_and(frame, frame, mask=roi)
+        cv2.imshow('ROI',new_frame)
+print("ROI points:", roi_pts)
 
-
-sys.exit() # Debug exit point, remove later
+cv2.destroyAllWindows()
 
 print("Q quit | R reset points | C confirm (bird view)")
 
@@ -100,6 +108,8 @@ while nextRunning:
     if not ok: break
     frame = rotate(frame,ROTATE_CW_DEG)
     frame = cv2.resize(frame, (W_TARGET, H_TARGET))
+    raw=frame.copy()
+    # frame = cv2.bitwise_and(frame, frame, mask=roi) if get_roi else frame
     cv2.imshow('raw', frame)
 
     # —— choose / reset four points ——
@@ -121,10 +131,15 @@ while nextRunning:
 
     # —— bird-eye warp once we have H ——
     adjusted_matrix, (output_width, output_height)=bird_view(corner_pts)
-    bird = cv2.warpPerspective(frame, adjusted_matrix, (output_width, output_height),borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0))
+    bird = cv2.warpPerspective(raw, adjusted_matrix, (output_width, output_height),borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0))
+    roi_warp  = cv2.warpPerspective(roi,  adjusted_matrix, (output_width, output_height),
+                                    flags=cv2.INTER_NEAREST)
+    bird_roi  = cv2.bitwise_and(bird, bird, mask=roi_warp)    
+
     # bird=cv2.resize(bird,(H_TARGET, W_TARGET), interpolation=cv2.INTER_AREA) #New comment, tempt
     cv2.imshow('bird', bird)
-    # cv2.imwrite('bird_view.jpg', bird) # Uncomment to save bird view
+    cv2.imshow('ROI', bird_roi)
+    cv2.imwrite('bird_view.jpg', bird) # Uncomment to save bird view
     
     # —— blur → edges → Hough —— 
     gray = cv2.cvtColor(bird, cv2.COLOR_BGR2GRAY)

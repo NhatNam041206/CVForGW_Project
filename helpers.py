@@ -55,32 +55,21 @@ def bird_view(corner_pts, W_TARGET=640, H_TARGET=480):
     adjusted_matrix = adjustment_matrix @ matrix
     return adjusted_matrix, (output_width, output_height)
 
-def get_roi(roi_pts,frame):
-    roi_pts.sorted(key=lambda p: (p[1], p[0]))  # Sort by y, then by x
 
-    x1, y1 = roi_pts[0]
-    x2, y2 = roi_pts[1]
-    x3, y3 = roi_pts[2]
-    x4, y4 = roi_pts[3]
+def create_binary_quad(points, img_size=(640, 480)):
 
-    # The position of lines following this order: up(small), left, down(large), right 
-    # x1,y1: top-left corner 
-    # x2,y2: top-right corner
-    # x3,y3: bottom-right corner
-    # x4,y4: bottom-left corner
-    # (with x-axis, and y-axis following OpenCV coordinates)
-    #
-    #
-    # Calculate each lines based on the points
-    delta_x=np.array([x2-x1,
-             x1-x4,
-             x3-x4,
-             x3-x2])
+    mask = np.zeros(img_size, dtype=np.uint8)
 
-    delta_y=np.array([y2-y1,
-             y1-y4,
-             y3-y4,
-             y3-y2])
+    pts = np.array(points, dtype=np.int32).reshape(-1, 1, 2)
 
-    
+    cv2.fillPoly(mask, [pts], 255)
 
+    return mask
+
+def apply_roi(roi,img_size=(640, 480)):
+    # resize ROI to match the original image size
+    # roi = cv2.resize(src=roi, dsize=(img_size[0], img_size[1]))    
+    # scale ROI to [0, 1] => binary mask
+    thresh, roi = cv2.threshold(roi, thresh=128, maxval=1, type=cv2.THRESH_BINARY)
+
+    return roi

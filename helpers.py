@@ -73,3 +73,62 @@ def apply_roi(roi,img_size=(640, 480)):
     thresh, roi = cv2.threshold(roi, thresh=128, maxval=1, type=cv2.THRESH_BINARY)
 
     return roi
+
+def angle_detecting(lines,img_size=(640, 480)):
+    rhos=lines[:,0]
+    thetas=lines[:,1]
+
+    w,h=img_size=img_size
+
+    lines_index=np.array(range(len(rhos)))
+
+    # Running the initial calculations
+    x_intercepts=rhos/np.cos(thetas)
+
+    filter_matrix=np.logical_and(x_intercepts<=w,x_intercepts>=0)
+    x_intercepts_f=x_intercepts[filter_matrix]
+    rhos_f=rhos[filter_matrix]
+    lines_index_f=lines_index[filter_matrix]
+
+    left_lines_matrix=rhos_f>0
+    right_lines_matrix=rhos_f<0
+    
+    left_lines=lines_index_f[left_lines_matrix]
+    right_lines=lines_index_f[right_lines_matrix]
+
+    rhos_f_l=rhos_f[left_lines_matrix]
+    rhos_f_r=rhos_f[right_lines_matrix]
+
+    delta_y_l=x_intercepts_f[left_lines_matrix]/np.tan(thetas[left_lines])
+    delta_y_r=(w-x_intercepts_f[right_lines_matrix])/np.tan(2*np.pi-thetas[right_lines])
+
+    # Calculate startpoints and endpoints
+    #
+    #
+    end_points_l=[]
+    start_points_l=[(x_,0) for x_ in x_intercepts_f[left_lines_matrix]]
+
+    end_points_r=[]
+    start_points_r=[(x_,0) for x_ in x_intercepts_f[right_lines_matrix]]
+
+
+    for i,delta_y in enumerate(delta_y_l):
+        if delta_y<=h:
+            end_points_l.append((0,rhos_f_l[i]/np.sin(thetas[left_lines[i]])))
+            continue
+        end_points_l.append((rhos_f_l[i]-h*np.sin(thetas[left_lines[i]])/np.cos(thetas[left_lines[i]]),h))
+
+    for i,delta_y in enumerate(delta_y_r):
+        if delta_y<=h:
+            end_points_r.append((w,(rhos_f_r[i]-w*np.cos(thetas[right_lines[i]]))/np.sin(thetas[right_lines[i]])))
+            continue
+        end_points_r.append(((rhos_f_r[i]-h*np.sin(thetas[right_lines[i]]))/np.cos(thetas[right_lines[i]]),h))
+    
+    delta_x_all=np.array(list(start_points_r)+list(start_points_l))[:,0]
+    delta_y_all=np.array(list(delta_y_r)+list(delta_y_l))
+
+    actual_angle_r=np.negative(np.arctan2(delta_y_r,np.array(start_points_r)[:,0])-np.pi/2) # Radian
+    actual_angle_l=np.arctan2(delta_y_l,np.array(start_points_l)[:,0])-np.pi/2 # Radian
+
+    print(f"Actual difference from central angle in degree form: {np.rad2deg(np.sum([actual_angle_l,actual_angle_r]))}")
+    return np.sum([actual_angle_l,actual_angle_r])

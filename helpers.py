@@ -62,23 +62,21 @@ def cluster_lines(lines,RHO_BIAS,ANGLE_BIAS):
 #     return adjusted_matrix, (output_width, output_height)
 
 
-# def create_binary_quad(points, img_size=(640, 480)):
+def create_binary_quad(points, img_size=(480,640)):
 
-#     mask = np.zeros(img_size, dtype=np.uint8)
+    mask = np.zeros(img_size, dtype=np.uint8)
 
-#     pts = np.array(points, dtype=np.int32).reshape(-1, 1, 2)
+    pts = np.array(points, dtype=np.int32).reshape(-1, 1, 2)
 
-#     cv2.fillPoly(mask, [pts], 255)
+    cv2.fillPoly(mask, [pts], 255)
 
-#     return mask
+    return mask
 
-# def apply_roi(roi,img_size=(640, 480)):
-#     # resize ROI to match the original image size
-#     # roi = cv2.resize(src=roi, dsize=(img_size[0], img_size[1]))    
-#     # scale ROI to [0, 1] => binary mask
-#     thresh, roi = cv2.threshold(roi, thresh=128, maxval=1, type=cv2.THRESH_BINARY)
+def apply_roi(mask):
+    # Ensure mask is binary 0 or 255
+    mask = np.clip(mask, 0, 255).astype(np.uint8)
+    return mask
 
-#     return roi
 def line_intersection(rho1, theta1, rho2, theta2, eps=1e-9):
     """
     Return (x, y) where the two Hough-space lines intersect.
